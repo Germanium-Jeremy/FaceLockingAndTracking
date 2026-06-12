@@ -521,9 +521,20 @@ def draw_text_box(
 # -------------------------
 MOVEMENT_LEFT = "LEFT"
 MOVEMENT_RIGHT = "RIGHT"
-MOVEMENT_CENTER = "CENTER"
+MOVEMENT_CENTER = "CENTER"  # Internal: face is centered in the camera frame.
 MOVEMENT_SEARCH = "SEARCH"
-MOVEMENT_IDLE = "IDLE"
+MOVEMENT_IDLE = "IDLE"  # ESP: hold current servo angle (do not pan).
+
+
+def tracking_command_to_mqtt(tracking_command: str) -> str:
+    """Convert frame-tracking intent into an ESP-safe MQTT payload.
+
+    On the ESP, CENTER snaps the servo to its home angle. During tracking we only
+    want that when the face is already centered in frame, which means hold position (IDLE).
+    """
+    if tracking_command == MOVEMENT_CENTER:
+        return MOVEMENT_IDLE
+    return tracking_command
 
 
 def compute_face_error_x(kps: np.ndarray, frame_width: int) -> float:
@@ -579,11 +590,11 @@ class MovementDwellGate:
         elapsed = now - self.dwell_started_at
         remaining = self.settle_sec - elapsed
         if remaining > 0:
-            # Hold still while observing where the locked face settles.
-            return MOVEMENT_CENTER, remaining
+            # Keep the servo at its current angle while observing face position.
+            return MOVEMENT_IDLE, remaining
 
         self.begin_dwell(now)
-        return desired_command, 0.0
+        return tracking_command_to_mqtt(desired_command), 0.0
 
 
 class MqttMovementPublisher:
@@ -1124,11 +1135,12 @@ def main():
                 lost_for = current_time - face_missing_since
                 if lost_for < args.search_delay_sec:
                     movement_command = MOVEMENT_CENTER
+                    mqtt_publish_command = MOVEMENT_IDLE
                 else:
                     movement_command = MOVEMENT_SEARCH
+                    mqtt_publish_command = MOVEMENT_SEARCH
                 movement_error_x = 0.0
                 movement_dwell_remaining = None
-                mqtt_publish_command = movement_command
             else:
                 filtered_error_x = None
                 stable_track_command = MOVEMENT_CENTER
@@ -1158,7 +1170,12 @@ def main():
 
             movement_text = f"MQTT publish: {mqtt_publish_command}"
             if movement_command in (MOVEMENT_LEFT, MOVEMENT_RIGHT, MOVEMENT_CENTER):
-                movement_text += f" | target: {movement_command} (err_x={movement_error_x:+.1f}px)"
+                track_label = (
+                    "aligned"
+                    if movement_command == MOVEMENT_CENTER
+                    else movement_command
+                )
+                movement_text += f" | track: {track_label} (err_x={movement_error_x:+.1f}px)"
             if movement_dwell_remaining is not None and movement_dwell_remaining > 0:
                 movement_text += f" | settling {movement_dwell_remaining:.1f}s"
             draw_text_with_shadow(vis, movement_text, (12, y_offset), 0.62, (180, 220, 255), 1, font=cv2.FONT_HERSHEY_DUPLEX)

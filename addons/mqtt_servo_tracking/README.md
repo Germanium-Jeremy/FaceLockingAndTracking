@@ -56,11 +56,11 @@ Topic:
 - `vision/teamalpha/movement/Jeremie`
 
 Payloads:
-- `LEFT`: face is left of center, rotate camera left
-- `RIGHT`: face is right of center, rotate camera right
-- `CENTER`: face is centered, hold position
+- `LEFT`: face is left of frame center, rotate camera left
+- `RIGHT`: face is right of frame center, rotate camera right
+- `IDLE`: hold current servo angle (used while settling and when the face is aligned in frame)
 - `SEARCH`: locked face currently missing, sweep back/forth
-- `IDLE`: no active lock, hold position
+- `CENTER`: snap servo to home angle (not used during normal tracking; Python sends `IDLE` instead when the face is centered in frame)
 
 ## Python Setup
 Install dependencies from repo root:
