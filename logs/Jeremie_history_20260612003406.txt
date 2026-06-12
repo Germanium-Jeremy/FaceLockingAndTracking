@@ -1,2 +1,0 @@
-2026-06-12 00:34:06.108679 - FACE_LOCKED: Face locked: Jeremie
-2026-06-12 00:34:06.577328 - HEAD_LEFT: Moved left by 14.0px

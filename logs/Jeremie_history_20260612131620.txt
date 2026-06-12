@@ -1,7 +1,0 @@
-2026-06-12 13:16:17.225210 - FACE_LOCKED: Face locked: Jeremie
-2026-06-12 13:16:17.574247 - SMILE: Smile detected (ratio: 139.26)
-2026-06-12 13:16:17.892388 - SMILE: Smile detected (ratio: 251.10)
-2026-06-12 13:16:18.372272 - SMILE: Smile detected (ratio: 581.04)
-2026-06-12 13:16:18.864443 - SMILE: Smile detected (ratio: 301.67)
-2026-06-12 13:16:19.134936 - SMILE: Smile detected (ratio: 82.96)
-2026-06-12 13:16:19.247846 - SMILE: Smile detected (ratio: 886.92)

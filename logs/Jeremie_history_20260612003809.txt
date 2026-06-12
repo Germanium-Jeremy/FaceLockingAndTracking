@@ -1,8 +1,0 @@
-2026-06-12 00:37:57.466850 - FACE_LOCKED: Face locked: Jeremie
-2026-06-12 00:37:58.949099 - HEAD_LEFT: Moved left by 11.8px
-2026-06-12 00:37:59.199012 - HEAD_LEFT: Moved left by 36.9px
-2026-06-12 00:37:59.199012 - SMILE: Smile detected (ratio: 19.08)
-2026-06-12 00:37:59.421650 - HEAD_LEFT: Moved left by 158.0px
-2026-06-12 00:37:59.421650 - SMILE: Smile detected (ratio: 42.32)
-2026-06-12 00:37:59.543143 - HEAD_LEFT: Moved left by 111.7px
-2026-06-12 00:37:59.665339 - HEAD_LEFT: Moved left by 101.7px

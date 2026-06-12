@@ -521,6 +521,8 @@ def draw_text_box(
 # -------------------------
 MOVEMENT_LEFT = "LEFT"
 MOVEMENT_RIGHT = "RIGHT"
+MOVEMENT_LEFT_LONG = "LEFT_LONG"
+MOVEMENT_RIGHT_LONG = "RIGHT_LONG"
 MOVEMENT_CENTER = "CENTER"  # Internal: face is centered in the camera frame.
 MOVEMENT_SEARCH = "SEARCH"
 MOVEMENT_IDLE = "IDLE"  # ESP: hold current servo angle (do not pan).
@@ -542,22 +544,25 @@ def compute_face_error_x(kps: np.ndarray, frame_width: int) -> float:
     return face_center_x - (float(frame_width) / 2.0)
 
 
-def command_from_error_with_hysteresis(
+def is_near_frame_edge(kps: np.ndarray, frame_width: int, margin_ratio: float) -> bool:
+    face_center_x = float(np.mean(kps[:, 0]))
+    margin = float(frame_width) * float(margin_ratio)
+    return face_center_x < margin or face_center_x > (float(frame_width) - margin)
+
+
+def select_tracking_command(
     error_x: float,
     deadzone_px: float,
-    center_exit_hysteresis_px: float,
-    previous_command: str,
+    edge_correction_px: float,
+    near_edge: bool,
 ) -> str:
-    # Wider threshold when leaving CENTER prevents LEFT/RIGHT oscillation around center.
-    if previous_command == MOVEMENT_CENTER:
-        if abs(error_x) <= (float(deadzone_px) + float(center_exit_hysteresis_px)):
-            return MOVEMENT_CENTER
-
     if abs(error_x) <= float(deadzone_px):
         return MOVEMENT_CENTER
-    if error_x < 0:
-        return MOVEMENT_LEFT
-    return MOVEMENT_RIGHT
+
+    direction = MOVEMENT_LEFT if error_x < 0 else MOVEMENT_RIGHT
+    if near_edge or abs(error_x) >= float(edge_correction_px):
+        return MOVEMENT_LEFT_LONG if direction == MOVEMENT_LEFT else MOVEMENT_RIGHT_LONG
+    return direction
 
 
 @dataclass
@@ -575,14 +580,24 @@ class MovementDwellGate:
 
     def resolve_publish_command(
         self,
-        desired_command: str,
+        error_x: float,
+        deadzone_px: float,
+        edge_correction_px: float,
+        near_edge: bool,
         now: float,
         *,
         tracking_active: bool,
-    ) -> Tuple[str, Optional[float]]:
+    ) -> Tuple[str, Optional[float], str]:
+        tracking_command = select_tracking_command(
+            error_x=error_x,
+            deadzone_px=deadzone_px,
+            edge_correction_px=edge_correction_px,
+            near_edge=near_edge,
+        )
+
         if not tracking_active:
             self.reset()
-            return desired_command, None
+            return tracking_command_to_mqtt(tracking_command), None, tracking_command
 
         if self.dwell_started_at is None:
             self.begin_dwell(now)
@@ -591,10 +606,10 @@ class MovementDwellGate:
         remaining = self.settle_sec - elapsed
         if remaining > 0:
             # Keep the servo at its current angle while observing face position.
-            return MOVEMENT_IDLE, remaining
+            return MOVEMENT_IDLE, remaining, tracking_command
 
         self.begin_dwell(now)
-        return tracking_command_to_mqtt(desired_command), 0.0
+        return tracking_command_to_mqtt(tracking_command), 0.0, tracking_command
 
 
 class MqttMovementPublisher:
@@ -714,22 +729,22 @@ def parse_args() -> argparse.Namespace:
         help="Horizontal pixel deadzone around frame center for CENTER command.",
     )
     parser.add_argument(
-        "--center-exit-hysteresis-px",
+        "--edge-correction-px",
         type=float,
-        default=30.0,
-        help="Extra pixels required to leave CENTER and start LEFT/RIGHT movement.",
+        default=120.0,
+        help="Minimum horizontal offset before issuing a longer pan after each settle window.",
+    )
+    parser.add_argument(
+        "--edge-margin-ratio",
+        type=float,
+        default=0.12,
+        help="Treat the face as near the frame edge when it is within this fraction of the border.",
     )
     parser.add_argument(
         "--error-smooth-alpha",
         type=float,
         default=0.35,
         help="EMA smoothing factor for horizontal error (0..1). Lower = smoother.",
-    )
-    parser.add_argument(
-        "--command-confirm-frames",
-        type=int,
-        default=2,
-        help="How many consecutive frames are needed before changing LEFT/RIGHT/CENTER.",
     )
     parser.add_argument(
         "--search-delay-sec",
@@ -775,9 +790,10 @@ def save_action_history(face_name: str, actions: List[Action]):
 def main():
     args = parse_args()
     args.error_smooth_alpha = float(max(0.01, min(1.0, args.error_smooth_alpha)))
-    args.command_confirm_frames = int(max(1, args.command_confirm_frames))
     args.search_delay_sec = float(max(0.0, args.search_delay_sec))
-    args.center_exit_hysteresis_px = float(max(0.0, args.center_exit_hysteresis_px))
+    args.edge_correction_px = float(max(0.0, args.edge_correction_px))
+    args.edge_margin_ratio = float(max(0.01, min(0.45, args.edge_margin_ratio)))
+    args.movement_settle_sec = float(max(0.5, args.movement_settle_sec))
     db_path = Path("data/db/face_db.npz")
     os.makedirs("logs", exist_ok=True)
     
@@ -851,9 +867,6 @@ def main():
     movement_dwell_remaining: Optional[float] = None
     movement_error_x = 0.0
     filtered_error_x: Optional[float] = None
-    stable_track_command = MOVEMENT_CENTER
-    pending_track_command: Optional[str] = None
-    pending_track_count = 0
     face_missing_since: Optional[float] = None
     prev_locked_face_found = False
     movement_dwell_gate = MovementDwellGate(settle_sec=args.movement_settle_sec)
@@ -929,9 +942,6 @@ def main():
                 selected_face_index = None
                 potential_face_to_lock = None
                 filtered_error_x = None
-                stable_track_command = MOVEMENT_CENTER
-                pending_track_command = None
-                pending_track_count = 0
                 face_missing_since = None
                 movement_dwell_gate.reset()
                 prev_locked_face_found = False
@@ -1096,37 +1106,24 @@ def main():
                         + (1.0 - args.error_smooth_alpha) * filtered_error_x
                     )
                 movement_error_x = float(filtered_error_x)
-
-                desired_track_command = command_from_error_with_hysteresis(
-                    error_x=movement_error_x,
-                    deadzone_px=args.deadzone_px,
-                    center_exit_hysteresis_px=args.center_exit_hysteresis_px,
-                    previous_command=stable_track_command,
+                near_edge = is_near_frame_edge(
+                    locked_face_kps,
+                    frame_width=w,
+                    margin_ratio=args.edge_margin_ratio,
                 )
-
-                if desired_track_command == stable_track_command:
-                    pending_track_command = None
-                    pending_track_count = 0
-                else:
-                    if pending_track_command == desired_track_command:
-                        pending_track_count += 1
-                    else:
-                        pending_track_command = desired_track_command
-                        pending_track_count = 1
-                    if pending_track_count >= args.command_confirm_frames:
-                        stable_track_command = desired_track_command
-                        pending_track_command = None
-                        pending_track_count = 0
-
-                movement_command = stable_track_command
 
                 if not prev_locked_face_found:
                     movement_dwell_gate.begin_dwell(current_time)
 
-                mqtt_publish_command, movement_dwell_remaining = movement_dwell_gate.resolve_publish_command(
-                    movement_command,
-                    current_time,
-                    tracking_active=True,
+                mqtt_publish_command, movement_dwell_remaining, movement_command = (
+                    movement_dwell_gate.resolve_publish_command(
+                        error_x=movement_error_x,
+                        deadzone_px=args.deadzone_px,
+                        edge_correction_px=args.edge_correction_px,
+                        near_edge=near_edge,
+                        now=current_time,
+                        tracking_active=True,
+                    )
                 )
             elif face_lock:
                 movement_dwell_gate.reset()
@@ -1143,9 +1140,6 @@ def main():
                 movement_dwell_remaining = None
             else:
                 filtered_error_x = None
-                stable_track_command = MOVEMENT_CENTER
-                pending_track_command = None
-                pending_track_count = 0
                 face_missing_since = None
                 movement_command = MOVEMENT_IDLE
                 movement_error_x = 0.0
@@ -1169,7 +1163,13 @@ def main():
             y_offset += 40
 
             movement_text = f"MQTT publish: {mqtt_publish_command}"
-            if movement_command in (MOVEMENT_LEFT, MOVEMENT_RIGHT, MOVEMENT_CENTER):
+            if movement_command in (
+                MOVEMENT_LEFT,
+                MOVEMENT_RIGHT,
+                MOVEMENT_LEFT_LONG,
+                MOVEMENT_RIGHT_LONG,
+                MOVEMENT_CENTER,
+            ):
                 track_label = (
                     "aligned"
                     if movement_command == MOVEMENT_CENTER
@@ -1257,9 +1257,6 @@ def main():
                     selected_face_index = None
                     potential_face_to_lock = None
                     filtered_error_x = None
-                    stable_track_command = MOVEMENT_CENTER
-                    pending_track_command = None
-                    pending_track_count = 0
                     face_missing_since = None
                     movement_dwell_gate.reset()
                     prev_locked_face_found = False
@@ -1280,9 +1277,6 @@ def main():
                         f"Face locked: {name}"
                     ))
                     filtered_error_x = None
-                    stable_track_command = MOVEMENT_CENTER
-                    pending_track_command = None
-                    pending_track_count = 0
                     face_missing_since = None
                     movement_dwell_gate.begin_dwell(current_time)
                     prev_locked_face_found = False

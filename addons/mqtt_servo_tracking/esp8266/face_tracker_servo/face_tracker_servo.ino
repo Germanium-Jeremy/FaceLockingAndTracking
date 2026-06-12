@@ -1,3 +1,18 @@
+/*
+ * Face-tracking servo controller (ESP32 / ESP8266-compatible sketch).
+ *
+ * MQTT payloads from recognize_mqtt.py:
+ *   IDLE         - hold current servo angle (2s settle windows, face aligned in frame)
+ *   LEFT, RIGHT  - short pan burst for moderate offset from frame center
+ *   LEFT_LONG, RIGHT_LONG - longer pan when the face is near the frame edge
+ *   SEARCH       - sweep back/forth while the locked face is missing
+ *   CENTER       - snap servo to SERVO_CENTER_ANGLE (manual/debug; not used in tracking)
+ *
+ * Tracking flow on the PC:
+ *   1. Publish IDLE while observing face position (~movement-settle-sec, default 2s)
+ *   2. Publish LEFT/RIGHT or LEFT_LONG/RIGHT_LONG if correction is needed
+ *   3. Publish IDLE again and repeat
+ */
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ESP32Servo.h>
@@ -6,22 +21,30 @@
 const char* WIFI_SSID = "watashi";
 const char* WIFI_PASSWORD = "nzizaprince78";
 
-// MQTT settings
+// MQTT settings (broker IP must match recognize_mqtt.py --mqtt-broker)
 const char* MQTT_SERVER = "192.168.1.194";
 const uint16_t MQTT_PORT = 1883;
 const char* MQTT_TOPIC = "vision/teamalpha/movement/Jeremie";
 const char* MQTT_CLIENT_ID = "teamalpha-face-servo";
 
 // Servo configuration
-const uint8_t SERVO_PIN = 2; // D5
+const uint8_t SERVO_PIN = 2;
 const int SERVO_MIN_ANGLE = 0;
 const int SERVO_MAX_ANGLE = 180;
 const int SERVO_CENTER_ANGLE = 90;
+
+// Short pan burst (moderate face offset)
 const int TRACK_STEP = 1;
+const unsigned long COMMAND_TIMEOUT_MS = 1000;
+
+// Long pan burst (face near frame edge or large offset)
+const int TRACK_STEP_LONG = 3;
+const unsigned long COMMAND_TIMEOUT_LONG_MS = 1800;
+
+// Search sweep when locked face is lost
 const int SEARCH_STEP = 2;
-const unsigned long TRACK_INTERVAL_MS = 55;
 const unsigned long SEARCH_INTERVAL_MS = 70;
-const unsigned long COMMAND_TIMEOUT_MS = 800;
+const unsigned long TRACK_INTERVAL_MS = 55;
 
 const bool REVERSE_SERVO = true;
 
@@ -43,8 +66,8 @@ int sweepDirection = 1;
 unsigned long lastMoveAt = 0;
 unsigned long lastReconnectAttempt = 0;
 unsigned long lastCommandAt = 0;
-
-// --- Core Logic ---
+int activeTrackStep = TRACK_STEP;
+unsigned long activeCommandTimeout = COMMAND_TIMEOUT_MS;
 
 void setServoAngle(int angle) {
   angle = constrain(angle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
@@ -54,56 +77,101 @@ void setServoAngle(int angle) {
 
 void applyTrackingStep(int logicalDirection) {
   int direction = REVERSE_SERVO ? -logicalDirection : logicalDirection;
-  setServoAngle(servoAngle + (direction * TRACK_STEP));
+  setServoAngle(servoAngle + (direction * activeTrackStep));
 }
 
-MovementCommand parseCommand(String message) {
+void applyPanCommand(MovementCommand command, int step, unsigned long timeoutMs) {
+  currentCommand = command;
+  activeTrackStep = step;
+  activeCommandTimeout = timeoutMs;
+  lastCommandAt = millis();
+}
+
+void holdCurrentPosition() {
+  currentCommand = CMD_IDLE;
+  activeTrackStep = TRACK_STEP;
+  activeCommandTimeout = COMMAND_TIMEOUT_MS;
+  lastCommandAt = millis();
+}
+
+bool dispatchMovementMessage(const String& rawMessage) {
+  String message = rawMessage;
   message.trim();
   message.toUpperCase();
 
-  // Strip "CMD_" prefix if the user types it in Serial
   if (message.startsWith("CMD_")) {
     message = message.substring(4);
   }
 
-  if (message == "LEFT") return CMD_LEFT;
-  if (message == "RIGHT") return CMD_RIGHT;
-  if (message == "CENTER") return CMD_CENTER;
-  if (message == "SEARCH") return CMD_SEARCH;
-  return CMD_IDLE;
-}
+  if (message.length() == 0) {
+    return false;
+  }
 
-// --- Inputs (MQTT & Serial) ---
+  if (message == "IDLE") {
+    holdCurrentPosition();
+    return true;
+  }
+  if (message == "LEFT_LONG") {
+    applyPanCommand(CMD_LEFT, TRACK_STEP_LONG, COMMAND_TIMEOUT_LONG_MS);
+    return true;
+  }
+  if (message == "RIGHT_LONG") {
+    applyPanCommand(CMD_RIGHT, TRACK_STEP_LONG, COMMAND_TIMEOUT_LONG_MS);
+    return true;
+  }
+  if (message == "LEFT") {
+    applyPanCommand(CMD_LEFT, TRACK_STEP, COMMAND_TIMEOUT_MS);
+    return true;
+  }
+  if (message == "RIGHT") {
+    applyPanCommand(CMD_RIGHT, TRACK_STEP, COMMAND_TIMEOUT_MS);
+    return true;
+  }
+  if (message == "SEARCH") {
+    currentCommand = CMD_SEARCH;
+    activeTrackStep = TRACK_STEP;
+    activeCommandTimeout = COMMAND_TIMEOUT_MS;
+    lastCommandAt = millis();
+    return true;
+  }
+  if (message == "CENTER") {
+    currentCommand = CMD_CENTER;
+    activeTrackStep = TRACK_STEP;
+    activeCommandTimeout = COMMAND_TIMEOUT_MS;
+    lastCommandAt = millis();
+    return true;
+  }
+
+  return false;
+}
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String message = "";
+  message.reserve(length + 1);
   for (unsigned int i = 0; i < length; i++) {
     message += (char)payload[i];
   }
 
-  currentCommand = parseCommand(message);
-  lastCommandAt = millis();
-
-  Serial.print("[MQTT] Recieved: ");
-  Serial.println(message);
-}
-
-void handleSerial() {
-  if (Serial.available() > 0) {
-    String input = Serial.readStringUntil('\n');
-    MovementCommand newCmd = parseCommand(input);
-    
-    // Only update if it's a valid movement command to avoid accidental idles
-    if (newCmd != CMD_IDLE || input.indexOf("IDLE") >= 0) {
-      currentCommand = newCmd;
-      lastCommandAt = millis();
-      Serial.print("[SERIAL] Executing: ");
-      Serial.println(input);
-    }
+  if (dispatchMovementMessage(message)) {
+    Serial.print("[MQTT] Received: ");
+    Serial.println(message);
+  } else {
+    Serial.print("[MQTT] Ignored: ");
+    Serial.println(message);
   }
 }
 
-// --- Networking ---
+void handleSerial() {
+  if (!Serial.available()) {
+    return;
+  }
+
+  String input = Serial.readStringUntil('\n');
+  if (dispatchMovementMessage(input)) {
+    Serial.print("[SERIAL] Executing: ");
+    Serial.println(input);
+  }
+}
 
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
@@ -150,33 +218,33 @@ bool connectMqtt() {
   return true;
 }
 
-// --- Servo Handling ---
-
 void handleServo() {
   unsigned long now = millis();
 
-  // Auto-idle if no command received within timeout
-  if ((now - lastCommandAt) > COMMAND_TIMEOUT_MS) {
+  if ((now - lastCommandAt) > activeCommandTimeout) {
     currentCommand = CMD_IDLE;
+  }
+
+  if (currentCommand == CMD_IDLE) {
+    return;
   }
 
   if (currentCommand == CMD_CENTER) {
     setServoAngle(SERVO_CENTER_ANGLE);
-    currentCommand = CMD_IDLE; // Reset after centering
+    currentCommand = CMD_IDLE;
     return;
   }
 
   if (currentCommand == CMD_SEARCH) {
     if (now - lastMoveAt < SEARCH_INTERVAL_MS) return;
     lastMoveAt = now;
-    
+
     setServoAngle(servoAngle + (sweepDirection * SEARCH_STEP));
     if (servoAngle >= SERVO_MAX_ANGLE) sweepDirection = -1;
     if (servoAngle <= SERVO_MIN_ANGLE) sweepDirection = 1;
     return;
   }
 
-  // Tracking Logic (LEFT/RIGHT)
   if (now - lastMoveAt < TRACK_INTERVAL_MS) return;
   lastMoveAt = now;
 
@@ -184,12 +252,11 @@ void handleServo() {
   else if (currentCommand == CMD_RIGHT) applyTrackingStep(1);
 }
 
-// --- Main ---
-
 void setup() {
   Serial.begin(115200);
   delay(10);
-  Serial.println("\n[SYS] Team Alpha Face-Servo Initializing...");
+  Serial.println("\n[SYS] Face-tracking servo controller starting...");
+  Serial.println("[SYS] Commands: IDLE, LEFT, RIGHT, LEFT_LONG, RIGHT_LONG, SEARCH, CENTER");
 
   panServo.attach(SERVO_PIN);
   setServoAngle(SERVO_CENTER_ANGLE);
@@ -202,13 +269,12 @@ void setup() {
 }
 
 void loop() {
-  // Ensure connectivity
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
   if (!mqttClient.connected()) connectMqtt();
-  
+
   mqttClient.loop();
-  handleSerial(); // New: Listen for Serial Monitor commands
+  handleSerial();
   handleServo();
-  
+
   yield();
 }

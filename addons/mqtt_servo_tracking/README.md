@@ -56,8 +56,8 @@ Topic:
 - `vision/teamalpha/movement/Jeremie`
 
 Payloads:
-- `LEFT`: face is left of frame center, rotate camera left
-- `RIGHT`: face is right of frame center, rotate camera right
+- `LEFT` / `RIGHT`: small pan correction after each settle window
+- `LEFT_LONG` / `RIGHT_LONG`: larger pan when the face is near the frame edge or far from center
 - `IDLE`: hold current servo angle (used while settling and when the face is aligned in frame)
 - `SEARCH`: locked face currently missing, sweep back/forth
 - `CENTER`: snap servo to home angle (not used during normal tracking; Python sends `IDLE` instead when the face is centered in frame)
@@ -93,6 +93,8 @@ Stability tuning tips:
 - Increase `--search-delay-sec` if brief recognition drops trigger SEARCH too aggressively.
 - Increase `--command-confirm-frames` to reduce LEFT/RIGHT flicker (slower reaction).
 - Increase `--movement-settle-sec` (default `2.0`) to wait longer before each servo correction.
+- Lower `--edge-correction-px` (default `120`) or `--edge-margin-ratio` (default `0.12`) if edge faces still do not trigger a pan.
+- Re-flash the ESP sketch after updates so `LEFT_LONG` / `RIGHT_LONG` are supported.
 
 ## ESP8266 Setup
 1. Open `esp8266/face_tracker_servo/face_tracker_servo.ino`.
