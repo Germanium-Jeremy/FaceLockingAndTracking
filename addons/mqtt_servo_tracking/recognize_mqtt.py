@@ -554,9 +554,12 @@ def select_tracking_command(
     error_x: float,
     deadzone_px: float,
     edge_correction_px: float,
+    pan_trigger_px: float,
     near_edge: bool,
 ) -> str:
     if abs(error_x) <= float(deadzone_px):
+        return MOVEMENT_CENTER
+    if abs(error_x) < float(pan_trigger_px):
         return MOVEMENT_CENTER
 
     direction = MOVEMENT_LEFT if error_x < 0 else MOVEMENT_RIGHT
@@ -583,6 +586,7 @@ class MovementDwellGate:
         error_x: float,
         deadzone_px: float,
         edge_correction_px: float,
+        pan_trigger_px: float,
         near_edge: bool,
         now: float,
         *,
@@ -592,6 +596,7 @@ class MovementDwellGate:
             error_x=error_x,
             deadzone_px=deadzone_px,
             edge_correction_px=edge_correction_px,
+            pan_trigger_px=pan_trigger_px,
             near_edge=near_edge,
         )
 
@@ -735,6 +740,12 @@ def parse_args() -> argparse.Namespace:
         help="Minimum horizontal offset before issuing a longer pan after each settle window.",
     )
     parser.add_argument(
+        "--pan-trigger-px",
+        type=float,
+        default=110.0,
+        help="Minimum horizontal offset before any pan command (reduces twitch on small shifts).",
+    )
+    parser.add_argument(
         "--edge-margin-ratio",
         type=float,
         default=0.12,
@@ -749,19 +760,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--search-delay-sec",
         type=float,
-        default=0.8,
+        default=2.0,
         help="Delay before sending SEARCH after the locked face is temporarily lost.",
     )
     parser.add_argument(
         "--mqtt-min-interval",
         type=float,
-        default=0.15,
+        default=1,
         help="Minimum seconds between repeated identical MQTT commands.",
     )
     parser.add_argument(
         "--movement-settle-sec",
         type=float,
-        default=2.0,
+        default=3.0,
         help="Seconds to observe locked-face position before each MQTT movement command.",
     )
     parser.add_argument(
@@ -792,6 +803,7 @@ def main():
     args.error_smooth_alpha = float(max(0.01, min(1.0, args.error_smooth_alpha)))
     args.search_delay_sec = float(max(0.0, args.search_delay_sec))
     args.edge_correction_px = float(max(0.0, args.edge_correction_px))
+    args.pan_trigger_px = float(max(args.deadzone_px, args.pan_trigger_px))
     args.edge_margin_ratio = float(max(0.01, min(0.45, args.edge_margin_ratio)))
     args.movement_settle_sec = float(max(0.5, args.movement_settle_sec))
     db_path = Path("data/db/face_db.npz")
@@ -1120,6 +1132,7 @@ def main():
                         error_x=movement_error_x,
                         deadzone_px=args.deadzone_px,
                         edge_correction_px=args.edge_correction_px,
+                        pan_trigger_px=args.pan_trigger_px,
                         near_edge=near_edge,
                         now=current_time,
                         tracking_active=True,

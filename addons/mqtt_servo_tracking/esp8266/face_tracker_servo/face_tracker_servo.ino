@@ -3,8 +3,8 @@
  *
  * MQTT payloads from recognize_mqtt.py:
  *   IDLE         - hold current servo angle (2s settle windows, face aligned in frame)
- *   LEFT, RIGHT  - short pan burst for moderate offset from frame center
- *   LEFT_LONG, RIGHT_LONG - longer pan when the face is near the frame edge
+ *   LEFT, RIGHT  - short fixed pulse (~4 smooth steps) for moderate offset
+ *   LEFT_LONG, RIGHT_LONG - longer fixed pulse (~7 steps) near the frame edge
  *   SEARCH       - sweep back/forth while the locked face is missing
  *   CENTER       - snap servo to SERVO_CENTER_ANGLE (manual/debug; not used in tracking)
  *
@@ -18,11 +18,11 @@
 #include <ESP32Servo.h>
 
 // Wi-Fi settings
-const char* WIFI_SSID = "watashi";
-const char* WIFI_PASSWORD = "nzizaprince78";
+const char* WIFI_SSID = "EdNet";
+const char* WIFI_PASSWORD = "Huawei@123";
 
 // MQTT settings (broker IP must match recognize_mqtt.py --mqtt-broker)
-const char* MQTT_SERVER = "192.168.1.194";
+const char* MQTT_SERVER = "broker.hivemq.com";
 const uint16_t MQTT_PORT = 1883;
 const char* MQTT_TOPIC = "vision/teamalpha/movement/Jeremie";
 const char* MQTT_CLIENT_ID = "teamalpha-face-servo";
@@ -33,18 +33,17 @@ const int SERVO_MIN_ANGLE = 0;
 const int SERVO_MAX_ANGLE = 180;
 const int SERVO_CENTER_ANGLE = 90;
 
-// Short pan burst (moderate face offset)
+// Pan pulse settings (one MQTT command = a fixed number of smooth steps, then auto-hold)
 const int TRACK_STEP = 1;
-const unsigned long COMMAND_TIMEOUT_MS = 1000;
-
-// Long pan burst (face near frame edge or large offset)
-const int TRACK_STEP_LONG = 3;
-const unsigned long COMMAND_TIMEOUT_LONG_MS = 1800;
+const int TRACK_STEP_LONG = 2;
+const int PULSE_STEPS_NORMAL = 4;
+const int PULSE_STEPS_LONG = 7;
+const unsigned long TRACK_INTERVAL_MS = 90;
+const unsigned long COMMAND_SAFETY_TIMEOUT_MS = 5000;
 
 // Search sweep when locked face is lost
 const int SEARCH_STEP = 2;
 const unsigned long SEARCH_INTERVAL_MS = 70;
-const unsigned long TRACK_INTERVAL_MS = 55;
 
 const bool REVERSE_SERVO = true;
 
@@ -67,7 +66,8 @@ unsigned long lastMoveAt = 0;
 unsigned long lastReconnectAttempt = 0;
 unsigned long lastCommandAt = 0;
 int activeTrackStep = TRACK_STEP;
-unsigned long activeCommandTimeout = COMMAND_TIMEOUT_MS;
+unsigned long activeCommandTimeout = COMMAND_SAFETY_TIMEOUT_MS;
+int pulseStepsRemaining = 0;
 
 void setServoAngle(int angle) {
   angle = constrain(angle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
@@ -80,18 +80,21 @@ void applyTrackingStep(int logicalDirection) {
   setServoAngle(servoAngle + (direction * activeTrackStep));
 }
 
-void applyPanCommand(MovementCommand command, int step, unsigned long timeoutMs) {
+void applyPanCommand(MovementCommand command, int step, int pulseSteps) {
   currentCommand = command;
   activeTrackStep = step;
-  activeCommandTimeout = timeoutMs;
+  pulseStepsRemaining = pulseSteps;
+  activeCommandTimeout = COMMAND_SAFETY_TIMEOUT_MS;
   lastCommandAt = millis();
 }
 
 void holdCurrentPosition() {
   currentCommand = CMD_IDLE;
+  pulseStepsRemaining = 0;
   activeTrackStep = TRACK_STEP;
-  activeCommandTimeout = COMMAND_TIMEOUT_MS;
+  activeCommandTimeout = COMMAND_SAFETY_TIMEOUT_MS;
   lastCommandAt = millis();
+  panServo.write(servoAngle);
 }
 
 bool dispatchMovementMessage(const String& rawMessage) {
@@ -112,32 +115,34 @@ bool dispatchMovementMessage(const String& rawMessage) {
     return true;
   }
   if (message == "LEFT_LONG") {
-    applyPanCommand(CMD_LEFT, TRACK_STEP_LONG, COMMAND_TIMEOUT_LONG_MS);
+    applyPanCommand(CMD_LEFT, TRACK_STEP_LONG, PULSE_STEPS_LONG);
     return true;
   }
   if (message == "RIGHT_LONG") {
-    applyPanCommand(CMD_RIGHT, TRACK_STEP_LONG, COMMAND_TIMEOUT_LONG_MS);
+    applyPanCommand(CMD_RIGHT, TRACK_STEP_LONG, PULSE_STEPS_LONG);
     return true;
   }
   if (message == "LEFT") {
-    applyPanCommand(CMD_LEFT, TRACK_STEP, COMMAND_TIMEOUT_MS);
+    applyPanCommand(CMD_LEFT, TRACK_STEP, PULSE_STEPS_NORMAL);
     return true;
   }
   if (message == "RIGHT") {
-    applyPanCommand(CMD_RIGHT, TRACK_STEP, COMMAND_TIMEOUT_MS);
+    applyPanCommand(CMD_RIGHT, TRACK_STEP, PULSE_STEPS_NORMAL);
     return true;
   }
   if (message == "SEARCH") {
     currentCommand = CMD_SEARCH;
+    pulseStepsRemaining = 0;
     activeTrackStep = TRACK_STEP;
-    activeCommandTimeout = COMMAND_TIMEOUT_MS;
+    activeCommandTimeout = COMMAND_SAFETY_TIMEOUT_MS;
     lastCommandAt = millis();
     return true;
   }
   if (message == "CENTER") {
     currentCommand = CMD_CENTER;
+    pulseStepsRemaining = 0;
     activeTrackStep = TRACK_STEP;
-    activeCommandTimeout = COMMAND_TIMEOUT_MS;
+    activeCommandTimeout = COMMAND_SAFETY_TIMEOUT_MS;
     lastCommandAt = millis();
     return true;
   }
@@ -221,8 +226,9 @@ bool connectMqtt() {
 void handleServo() {
   unsigned long now = millis();
 
-  if ((now - lastCommandAt) > activeCommandTimeout) {
-    currentCommand = CMD_IDLE;
+  if (currentCommand != CMD_IDLE && (now - lastCommandAt) > activeCommandTimeout) {
+    holdCurrentPosition();
+    return;
   }
 
   if (currentCommand == CMD_IDLE) {
@@ -231,7 +237,7 @@ void handleServo() {
 
   if (currentCommand == CMD_CENTER) {
     setServoAngle(SERVO_CENTER_ANGLE);
-    currentCommand = CMD_IDLE;
+    holdCurrentPosition();
     return;
   }
 
@@ -245,11 +251,22 @@ void handleServo() {
     return;
   }
 
+  if (pulseStepsRemaining <= 0) {
+    holdCurrentPosition();
+    return;
+  }
+
   if (now - lastMoveAt < TRACK_INTERVAL_MS) return;
   lastMoveAt = now;
 
   if (currentCommand == CMD_LEFT) applyTrackingStep(-1);
   else if (currentCommand == CMD_RIGHT) applyTrackingStep(1);
+  else return;
+
+  pulseStepsRemaining--;
+  if (pulseStepsRemaining <= 0) {
+    holdCurrentPosition();
+  }
 }
 
 void setup() {
