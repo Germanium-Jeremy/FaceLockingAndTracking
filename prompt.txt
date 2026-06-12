@@ -1,0 +1,169 @@
+1. INTEGRATED SITUATION
+1. Project Description
+
+BENAX Technologies Ltd is developing an AI-powered camera control system for live presentations, lectures, performances, and video-conferencing environments, where the camera must automatically follow a designated main subject in real time.
+
+Unlike conventional face tracking systems that follow any detected face, this system is required to lock onto one pre-enrolled speaker identity and continue tracking that same individual even when other faces appear in the camera frame (such as audience members, assistants, or co-presenters).
+
+The project is designed as an integrated assessment, bringing together competencies in machine learning, computer vision, networking, embedded systems, motor control, and power electronics.
+
+1.1 System Overview
+- A PC runs the AI pipeline, performing camera input acquisition, face detection, single-identity face recognition, face tracking, and generation of motion-control commands.
+- MQTT over Wi-Fi is used to continuously publish control commands from the PC to the embedded system.
+- An ESP8266 device subscribes to the MQTT commands and generates motor control signals.
+- A servo motor rotates the camera horizontally to keep the speaker centered.
+
+1.2 System Features
+a) Face Enrollment (Registration)
+The system captures 10–30 facial images of the main speaker under slightly different angles and expressions and generates a single stored facial profile (embedding/template) for later recognition.
+
+b) Single-Identity Recognition ("Speaker Lock")
+During operation, the system identifies the enrolled speaker and deliberately ignores all other faces detected in the frame.
+
+c) Tracking and Motion Control
+The camera remains centered on the recognized speaker by publishing motion statuses (e.g., MOVED_LEFT, MOVED_RIGHT, CENTERED, STOPPED, OUT_OF_FRAME) to the embedded controller.
+
+d) Robustness and Re-acquisition
+If the speaker's face is temporarily occluded (partially or fully blocked from view), the system enters a controlled search mode and re-acquires the same enrolled speaker once visibility is restored.
+
+e) Logging and Evidence
+The system records recognition results, including speaker identity, confidence score, and motor control commands, to provide verifiable operational evidence.
+
+TASK
+Design, implement, integrate, and demonstrate a complete AI-Powered Single-Speaker Face Recognition and Camera Tracking System with MQTT-based embedded motor control, proper power architecture, safety measures, and verifiable operational logging.
+
+The system must:
+- Enroll and recognize a single authorized speaker
+- Track the recognized speaker in real time
+- Convert tracking error into motor control logic
+- Publish and subscribe to commands using MQTT
+- Drive a servo motor using ESP8266
+- Ensure proper wiring and stable motion
+- Log speaker identity, confidence, timestamps, and motor commands
+- Demonstrate correct behavior under realistic conditions (multiple faces, occlusion, etc.)
+
+ACTIVITIES
+Activity |	Objective
+- Speaker Face Enrollment |	Implement a speaker enrollment process that creates a reusable facial profile for the main subject.
+- Single-Identity Face Recognition (Speaker Lock) |	Recognize only the enrolled speaker and ignore all other faces in the frame
+- Face Tracking and Command Generation |	Track the recognized speaker and convert tracking error into motor commands. Provide mermaid codes for the flowchart or block diagram for the "Recognize -> Track -> Command" pipeline.
+- MQTT-Based Embedded Motor Control |	Drive the servo motor using commands received over MQTT
+- System Validation and Evidence Logging |	Verify and document correct system operation with logs
+
+
+Hardware Requirements
+a) Vision System: USB Camera used for Real-time face detection, Face recognition, Face tracking, providing visual input.
+b) Motion and Actuation System: Servo Motor providing precise and Smooth horizontal rotation, Camera positioning
+c) Control and Communication: ESP8266 acts as the MQTT subscriber, Receives commands wirelessly and Generates servo control signals
+d) Mechanical Mounting Structure: Robust camera support system designed for Smooth horizontal rotation, Manually adjustable 2-DOF tilt mechanism and Dedicated servo mount
+e) Computing Platform
+
+Desktop/Laptop used for:
+
+Running AI algorithms
+Developing control scripts
+Managing MQTT communication
+Software Requirements
+Python 3.10+
+
+For:
+
+Face recognition
+Face tracking
+Control logic
+Libraries
+OpenCV
+
+For:
+
+Video capture
+Face detection
+Visualization
+Tracking
+Face Recognition / ML Library
+
+For:
+
+Facial embeddings
+Identity matching
+MQTT Broker
+
+Example:
+
+Mosquitto
+MQTT Client
+
+Example:
+
+paho-mqtt
+NumPy
+
+For numerical computations.
+
+Pandas / CSV / JSON
+
+For:
+
+Storing facial profiles
+Storing system logs
+Implementation Procedure
+a) Speaker Face Enrollment
+Capture 10–30 facial images
+Generate reusable facial embedding template
+Store template locally
+b) Single-Identity Face Recognition (Speaker Lock)
+Detect faces in each frame
+Compute embeddings
+Compare with stored speaker template
+Apply similarity threshold
+Accept only the enrolled speaker
+Display speaker and confidence score in real time
+c) Face Tracking and Command Generation
+Track enrolled speaker's face bounding box
+Compute horizontal error between face center and frame center
+Convert error into:
+LEFT
+RIGHT
+STOP
+SCAN
+Apply smoothing/deadband to reduce jitter
+Publish commands continuously via MQTT
+
+Provide a flowchart/block diagram for:
+
+Recognize → Track → Command Pipeline
+
+d) MQTT-Based Embedded Motor Control
+Configure ESP8266 as MQTT subscriber
+Interpret received commands
+Example:
+D5 → GPIO14 controls servo
+VIN and GND power the servo motor
+Ensure smooth motor motion
+e) System Validation and Evidence Logging
+
+Log:
+
+Speaker ID
+Confidence score
+Timestamps
+Published motor commands
+
+Demonstrate correct behavior when:
+
+Other faces appear
+Speaker is temporarily occluded
+Speaker moves across the frame
+Notes to Assessors
+Time Allowed
+
+6 Hours
+
+Materials Provided
+FalconEye V1 HD Camera Board
+2-DOF Mechanism
+Servo Motor
+ESP8266
+Micro-USB Cables
+Male-to-Female Jumper Wires
+USB Hub

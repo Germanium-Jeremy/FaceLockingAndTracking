@@ -1,0 +1,20 @@
+2026-06-12 15:16:45.443268 - FACE_LOCKED: Face locked: Jeremie
+2026-06-12 15:16:48.640953 - HEAD_RIGHT: Moved right by 10.9px
+2026-06-12 15:16:48.851143 - HEAD_RIGHT: Moved right by 11.3px
+2026-06-12 15:17:05.993303 - HEAD_LEFT: Moved left by 11.8px
+2026-06-12 15:17:06.928153 - SMILE: Smile detected (ratio: 51.66)
+2026-06-12 15:17:07.196419 - SMILE: Smile detected (ratio: 74.43)
+2026-06-12 15:17:07.274740 - SMILE: Smile detected (ratio: 113.21)
+2026-06-12 15:17:07.366984 - SMILE: Smile detected (ratio: 433.33)
+2026-06-12 15:17:07.535167 - SMILE: Smile detected (ratio: 519.76)
+2026-06-12 15:17:07.691624 - SMILE: Smile detected (ratio: 208.41)
+2026-06-12 15:17:07.940111 - HEAD_RIGHT: Moved right by 11.8px
+2026-06-12 15:17:07.940111 - SMILE: Smile detected (ratio: 2625.79)
+2026-06-12 15:17:08.261275 - SMILE: Smile detected (ratio: 300.05)
+2026-06-12 15:17:08.893051 - HEAD_RIGHT: Moved right by 14.6px
+2026-06-12 15:17:09.102398 - SMILE: Smile detected (ratio: 44.54)
+2026-06-12 15:17:11.602474 - HEAD_RIGHT: Moved right by 12.0px
+2026-06-12 15:17:12.618995 - HEAD_LEFT: Moved left by 39.6px
+2026-06-12 15:17:12.859298 - HEAD_LEFT: Moved left by 10.7px
+2026-06-12 15:17:14.448862 - HEAD_RIGHT: Moved right by 23.0px
+2026-06-12 15:17:14.665607 - HEAD_RIGHT: Moved right by 17.3px
