@@ -1,20 +1,19 @@
-#define USE_US_TIMER
-#include <ESP8266WiFi.h>
+#include <WiFi.h>
 #include <PubSubClient.h>
-#include <Servo.h>
+#include <ESP32Servo.h>
 
 // Wi-Fi settings
-const char* WIFI_SSID = "EdNet";
-const char* WIFI_PASSWORD = "Huawei@123";
+const char* WIFI_SSID = "watashi";
+const char* WIFI_PASSWORD = "nzizaprince78";
 
 // MQTT settings
-const char* MQTT_SERVER = "broker.hivemq.com";
+const char* MQTT_SERVER = "192.168.1.194";
 const uint16_t MQTT_PORT = 1883;
-const char* MQTT_TOPIC = "vision/teamalpha/movement";
+const char* MQTT_TOPIC = "vision/teamalpha/movement/Jeremie";
 const char* MQTT_CLIENT_ID = "teamalpha-face-servo";
 
 // Servo configuration
-const uint8_t SERVO_PIN = 14; // D5
+const uint8_t SERVO_PIN = 2; // D5
 const int SERVO_MIN_ANGLE = 0;
 const int SERVO_MAX_ANGLE = 180;
 const int SERVO_CENTER_ANGLE = 90;
@@ -121,6 +120,8 @@ void connectWiFi() {
 
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\n[WiFi] Connected");
+    Serial.print("[WiFi] IP: ");
+    Serial.println(WiFi.localIP());
   } else {
     Serial.println("\n[WiFi] Failed");
   }
@@ -140,7 +141,12 @@ bool connectMqtt() {
   }
 
   Serial.println(" Connected");
-  mqttClient.subscribe(MQTT_TOPIC);
+  if (mqttClient.subscribe(MQTT_TOPIC)) {
+    Serial.print("[MQTT] Subscribed to topic: ");
+    Serial.println(MQTT_TOPIC);
+  } else {
+    Serial.println("[MQTT] Subscribe failed");
+  }
   return true;
 }
 

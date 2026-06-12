@@ -156,7 +156,7 @@ A separate extension was added in [`addons/mqtt_servo_tracking`](addons/mqtt_ser
 
 - Python app: `addons/mqtt_servo_tracking/recognize_mqtt.py`
 - Broker: `157.173.101.159`
-- Topic: `vision/teamalpha/movement`
+- Topic: `vision/teamalpha/movement/Jeremie`
 - Commands: `LEFT`, `RIGHT`, `CENTER`, `SEARCH`, `IDLE`
 - ESP8266 firmware: `addons/mqtt_servo_tracking/esp8266/face_tracker_servo/face_tracker_servo.ino`
 - Upload helper: `addons/mqtt_servo_tracking/esp8266/upload.ps1`

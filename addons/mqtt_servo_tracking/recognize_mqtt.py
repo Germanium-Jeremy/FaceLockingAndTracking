@@ -549,6 +549,43 @@ def command_from_error_with_hysteresis(
     return MOVEMENT_RIGHT
 
 
+@dataclass
+class MovementDwellGate:
+    """Wait between MQTT movement commands so the face position can stabilize."""
+
+    settle_sec: float
+    dwell_started_at: Optional[float] = None
+
+    def reset(self) -> None:
+        self.dwell_started_at = None
+
+    def begin_dwell(self, now: float) -> None:
+        self.dwell_started_at = now
+
+    def resolve_publish_command(
+        self,
+        desired_command: str,
+        now: float,
+        *,
+        tracking_active: bool,
+    ) -> Tuple[str, Optional[float]]:
+        if not tracking_active:
+            self.reset()
+            return desired_command, None
+
+        if self.dwell_started_at is None:
+            self.begin_dwell(now)
+
+        elapsed = now - self.dwell_started_at
+        remaining = self.settle_sec - elapsed
+        if remaining > 0:
+            # Hold still while observing where the locked face settles.
+            return MOVEMENT_CENTER, remaining
+
+        self.begin_dwell(now)
+        return desired_command, 0.0
+
+
 class MqttMovementPublisher:
     def __init__(
         self,
@@ -557,42 +594,64 @@ class MqttMovementPublisher:
         topic: str,
         client_id: str,
         min_publish_interval: float = 0.15,
+        connect_timeout_sec: float = 10.0,
     ):
         self.topic = topic
         self.min_publish_interval = float(max(0.0, min_publish_interval))
         self.last_command: Optional[str] = None
         self.last_publish_at = 0.0
         self.connected = False
+        self._warned_not_connected = False
 
         if mqtt is None:
             raise RuntimeError("paho-mqtt is not installed. Add it to requirements and run pip install -r requirements.txt")
 
-        self.client = mqtt.Client(client_id=client_id, clean_session=True, protocol=mqtt.MQTTv311)
+        client_kwargs = {
+            "client_id": client_id,
+            "clean_session": True,
+            "protocol": mqtt.MQTTv311,
+        }
+        callback_api_version = getattr(mqtt, "CallbackAPIVersion", None)
+        if callback_api_version is not None:
+            client_kwargs["callback_api_version"] = callback_api_version.VERSION2
+
+        self.client = mqtt.Client(**client_kwargs)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.reconnect_delay_set(min_delay=1, max_delay=5)
         self.client.connect_async(broker_host, int(broker_port), keepalive=30)
         self.client.loop_start()
+        self.wait_for_connection(timeout_sec=connect_timeout_sec)
 
-    def _on_connect(self, _client, _userdata, _flags, rc, _properties=None):
+    @staticmethod
+    def _reason_code_value(reason_code) -> int:
+        if hasattr(reason_code, "value"):
+            return int(reason_code.value)
+        return int(reason_code)
+
+    def _on_connect(self, _client, _userdata, _flags, reason_code, _properties):
+        rc = self._reason_code_value(reason_code)
         self.connected = (rc == 0)
+        self._warned_not_connected = False
         if self.connected:
             print(f"[MQTT] Connected to broker, publishing on topic '{self.topic}'")
         else:
             print(f"[MQTT] Connect failed with code {rc}")
 
-    def _on_disconnect(self, _client, _userdata, *args):
-        # paho-mqtt V1 passes: (rc)
-        # paho-mqtt V2 passes: (disconnect_flags, reason_code, properties)
-        rc = 0
-        if len(args) == 1:
-            rc = int(args[0])
-        elif len(args) >= 2:
-            rc = int(args[1])
-
+    def _on_disconnect(self, _client, _userdata, _disconnect_flags, reason_code, _properties):
+        rc = self._reason_code_value(reason_code)
         self.connected = False
         if rc != 0:
             print(f"[MQTT] Unexpected disconnect (rc={rc}), retrying...")
+
+    def wait_for_connection(self, timeout_sec: float = 10.0) -> bool:
+        deadline = time.time() + max(0.1, float(timeout_sec))
+        while time.time() < deadline:
+            if self.connected:
+                return True
+            time.sleep(0.05)
+        print(f"[MQTT] Broker connection timed out after {timeout_sec:.1f}s")
+        return False
 
     def publish(self, command: str, force: bool = False):
         now = time.time()
@@ -603,6 +662,9 @@ class MqttMovementPublisher:
         ):
             return
         if not self.connected:
+            if not self._warned_not_connected:
+                print("[MQTT] Not connected to broker yet; movement commands are not being published.")
+                self._warned_not_connected = True
             return
 
         info = self.client.publish(self.topic, payload=command, qos=0, retain=False)
@@ -626,7 +688,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mqtt-port", type=int, default=1883, help="MQTT broker port.")
     parser.add_argument(
         "--mqtt-topic",
-        default="vision/teamalpha/movement",
+        default="vision/teamalpha/movement/Jeremie",
         help="MQTT topic to publish movement commands.",
     )
     parser.add_argument(
@@ -669,6 +731,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.15,
         help="Minimum seconds between repeated identical MQTT commands.",
+    )
+    parser.add_argument(
+        "--movement-settle-sec",
+        type=float,
+        default=2.0,
+        help="Seconds to observe locked-face position before each MQTT movement command.",
     )
     parser.add_argument(
         "--disable-mqtt",
@@ -733,7 +801,7 @@ def main():
     # Default threshold 0.40 for better recall (can be adjusted with +/-)
     matcher = FaceDBMatcher(db=db, dist_thresh=0.40)
     
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
     if not cap.isOpened():
         print("Camera not available")
         det.close()
@@ -768,12 +836,16 @@ def main():
     fps: Optional[float] = None
     show_debug = False
     movement_command = MOVEMENT_IDLE
+    mqtt_publish_command = MOVEMENT_IDLE
+    movement_dwell_remaining: Optional[float] = None
     movement_error_x = 0.0
     filtered_error_x: Optional[float] = None
     stable_track_command = MOVEMENT_CENTER
     pending_track_command: Optional[str] = None
     pending_track_count = 0
     face_missing_since: Optional[float] = None
+    prev_locked_face_found = False
+    movement_dwell_gate = MovementDwellGate(settle_sec=args.movement_settle_sec)
     mqtt_publisher: Optional[MqttMovementPublisher] = None
 
     if args.disable_mqtt:
@@ -850,6 +922,8 @@ def main():
                 pending_track_command = None
                 pending_track_count = 0
                 face_missing_since = None
+                movement_dwell_gate.reset()
+                prev_locked_face_found = False
                 if mqtt_publisher is not None:
                     mqtt_publisher.publish(MOVEMENT_IDLE, force=True)
             
@@ -1034,7 +1108,17 @@ def main():
                         pending_track_count = 0
 
                 movement_command = stable_track_command
+
+                if not prev_locked_face_found:
+                    movement_dwell_gate.begin_dwell(current_time)
+
+                mqtt_publish_command, movement_dwell_remaining = movement_dwell_gate.resolve_publish_command(
+                    movement_command,
+                    current_time,
+                    tracking_active=True,
+                )
             elif face_lock:
+                movement_dwell_gate.reset()
                 if face_missing_since is None:
                     face_missing_since = current_time
                 lost_for = current_time - face_missing_since
@@ -1043,6 +1127,8 @@ def main():
                 else:
                     movement_command = MOVEMENT_SEARCH
                 movement_error_x = 0.0
+                movement_dwell_remaining = None
+                mqtt_publish_command = movement_command
             else:
                 filtered_error_x = None
                 stable_track_command = MOVEMENT_CENTER
@@ -1051,9 +1137,14 @@ def main():
                 face_missing_since = None
                 movement_command = MOVEMENT_IDLE
                 movement_error_x = 0.0
+                movement_dwell_remaining = None
+                movement_dwell_gate.reset()
+                mqtt_publish_command = MOVEMENT_IDLE
+
+            prev_locked_face_found = bool(face_lock and locked_face_found)
 
             if mqtt_publisher is not None:
-                mqtt_publisher.publish(movement_command)
+                mqtt_publisher.publish(mqtt_publish_command)
             
             # Draw UI elements with proper spacing and modern styling
             y_offset = 35
@@ -1065,9 +1156,11 @@ def main():
             draw_text_box(vis, header, (12, y_offset), 0.75, (200, 255, 200), (20, 20, 20), 0.75, 6, cv2.FONT_HERSHEY_DUPLEX)
             y_offset += 40
 
-            movement_text = f"MQTT movement: {movement_command}"
+            movement_text = f"MQTT publish: {mqtt_publish_command}"
             if movement_command in (MOVEMENT_LEFT, MOVEMENT_RIGHT, MOVEMENT_CENTER):
-                movement_text += f" (err_x={movement_error_x:+.1f}px)"
+                movement_text += f" | target: {movement_command} (err_x={movement_error_x:+.1f}px)"
+            if movement_dwell_remaining is not None and movement_dwell_remaining > 0:
+                movement_text += f" | settling {movement_dwell_remaining:.1f}s"
             draw_text_with_shadow(vis, movement_text, (12, y_offset), 0.62, (180, 220, 255), 1, font=cv2.FONT_HERSHEY_DUPLEX)
             y_offset += 28
             
@@ -1151,6 +1244,8 @@ def main():
                     pending_track_command = None
                     pending_track_count = 0
                     face_missing_since = None
+                    movement_dwell_gate.reset()
+                    prev_locked_face_found = False
                     if mqtt_publisher is not None:
                         mqtt_publisher.publish(MOVEMENT_IDLE, force=True)
                 # Only allow locking if we have a selected recognized face
@@ -1172,6 +1267,8 @@ def main():
                     pending_track_command = None
                     pending_track_count = 0
                     face_missing_since = None
+                    movement_dwell_gate.begin_dwell(current_time)
+                    prev_locked_face_found = False
                     print(f"[FaceLock] Locked onto {name} (face {selected_face_index + 1 if selected_face_index is not None else '?'})")
                     # Keep selection for visual feedback, but locking is done
             

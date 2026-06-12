@@ -1,0 +1,14 @@
+# Copy these lines to the END of:
+#   C:\Program Files\mosquitto\mosquitto.conf
+#
+# Then restart the Mosquitto service (as Administrator):
+#   net stop mosquitto
+#   net start mosquitto
+#
+# Allow inbound TCP 1883 in Windows Firewall for the ESP to reach this PC.
+
+# Listen on all network interfaces (not just localhost).
+listener 1883 0.0.0.0
+
+# Development / lab use only. Do not expose this PC to the public internet.
+allow_anonymous true
