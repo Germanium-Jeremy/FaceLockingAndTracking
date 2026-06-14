@@ -40,7 +40,7 @@ class EnrollConfig:
     out_db_json: Path = Path("data/db/face_db.json")
     save_crops: bool = True
     crops_dir: Path = Path("data/enroll")
-    samples_needed: int = 15
+    samples_needed: int = 30
     auto_capture_every_s: float = 0.25
     max_existing_crops: int = 300
     # UI

@@ -772,7 +772,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--movement-settle-sec",
         type=float,
-        default=3.0,
+        default=1,
         help="Seconds to observe locked-face position before each MQTT movement command.",
     )
     parser.add_argument(
